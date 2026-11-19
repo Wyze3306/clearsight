@@ -57,7 +57,7 @@ function explainPath(path, name) {
   };
   if (rel && homeMap[rel]) return homeMap[rel];
   const sys = {
-    "/home/.ecryptfs": "Your encrypted home folder. These are your personal files, stored encrypted.",
+    "/home/.ecryptfs": "Encrypted copy of your home folder. Its real files are counted in your home folder instead.",
     "/usr": "Installed software",
     "/opt": "Software installed outside the package manager",
     "/var": "System data, logs and caches",
@@ -73,6 +73,8 @@ function explainPath(path, name) {
     "/snap": "Snap apps",
   };
   if (sys[path]) return sys[path];
+  if (lastStatus?.decrypted?.includes(path)) return "Your personal files, read through the encryption";
+  if (path.startsWith("/home/.ecryptfs/")) return "Encrypted copy of your home folder. Its real files are shown in your home folder instead.";
   if (name === "node_modules") return "Node.js packages. npm install restores them.";
   if (name === ".git") return "Version history of this project";
   if (name === "__pycache__") return "Python bytecode cache";
@@ -86,24 +88,68 @@ function chain(layers) {
     .join('<span class="arrow">›</span>')}</div>`;
 }
 
+let breakdowns = prefs.get("breakdowns", {});
+
+function legendRow(items) {
+  return `<div class="legend" style="grid-column:1/-1;margin-top:10px">${items
+    .filter((i) => i.v > 0)
+    .map((i) => `<div class="legend-item"><i class="sw" style="background:${i.c}"></i><div><div class="lg-label">${i.l}</div><b class="num">${bytes(i.v)}</b></div></div>`)
+    .join("")}</div>`;
+}
+
 function volumeHtml(v, info) {
   const ratio = v.size ? v.used / v.size : 0;
   const children = info.volumes.filter((o) => o.backed_by === v.mount);
-  const parent = v.backed_by && info.volumes.find((o) => o.mount === v.backed_by);
   const badges = [];
   if (v.encryption) badges.push(`<span class="badge good">${icons.shield}${esc(v.encryption)}</span>`);
+  if (children.some((c) => c.encryption)) badges.push(`<span class="badge good">${icons.shield}Holds your encrypted home folder</span>`);
   if (v.removable) badges.push(`<span class="badge">External</span>`);
   if (v.role === "boot") badges.push(`<span class="badge">Needed to start Linux</span>`);
   const freeRatio = v.size ? v.avail / v.size : 1;
   if (v.role !== "boot" && (freeRatio < 0.05 || (v.avail < 5 * 1024 ** 3 && v.size > 20 * 1024 ** 3))) badges.push(`<span class="badge bad">Almost full</span>`);
   else if (v.role !== "boot" && freeRatio < 0.12) badges.push(`<span class="badge warn">Getting full</span>`);
+
+  const bd = breakdowns[v.mount];
+  let usage;
+  if (bd && children.length) {
+    const home = Math.min(bd.home, v.used);
+    const system = Math.min(bd.system, Math.max(0, v.used - home));
+    const other = Math.max(0, v.used - home - system);
+    const P = (x) => (x / v.size) * 100;
+    usage =
+      bar(
+        [
+          { v: P(home), c: "var(--accent)", t: "Your files" },
+          { v: P(system), c: "var(--disk)", t: "Apps and system" },
+          { v: P(other), c: "var(--faint)", t: "Other" },
+          { v: P(v.reserved), c: "var(--line-strong)", t: "Reserved" },
+        ],
+        "thick"
+      ) +
+      legendRow([
+        { l: "Your files", v: home, c: "var(--accent)" },
+        { l: "Apps and system", v: system, c: "var(--disk)" },
+        { l: "Encryption overhead and unreadable", v: other, c: "var(--faint)" },
+        { l: "Reserved by ext4", v: v.reserved, c: "var(--line-strong)" },
+        { l: "Free", v: v.avail, c: "var(--panel-2)" },
+      ]) +
+      `<div class="muted" style="grid-column:1/-1;font-size:12px">Measured ${esc(dateTime(bd.at))}.</div>`;
+  } else {
+    usage = bar([{ v: ratio * 100, c: levelColor(ratio) || "var(--disk)" }], "thick");
+  }
+
   let notes = "";
-  if (parent) {
-    notes += `<div class="note">${icons.lock.replace('class="lock"', 'class="lock" style="width:12px;height:12px;vertical-align:-1px"')} <b>Your home folder is encrypted.</b> Its files are stored, encrypted, inside “${esc(
-      parent.label
-    )}” at <code>${esc(v.device)}</code>. That is why both show the same size and the same <b>${bytes(v.avail)}</b> of free space: deleting files in either one frees space for both.</div>`;
-  } else if (children.length) {
-    notes += `<div class="note">This drive also holds ${children.map((c) => `<b>${esc(c.label.toLowerCase())}</b> (${esc(c.mount)})`).join(", ")}. They share the same free space.</div>`;
+  for (const c of children) {
+    notes += `<div class="note row-gap" style="justify-content:space-between"><span><b>${esc(c.label)}</b> (${esc(c.mount)}) is on this drive${
+      c.encryption ? `, encrypted with eCryptfs and unlocked. Clearsight shows its real files, not the encrypted copy` : ""
+    }.</span><span class="row-gap"><button class="btn small" data-open="${esc(c.mount)}">${icons.open}Open</button><button class="btn small" data-explore="${esc(
+      c.mount
+    )}">See what uses space</button></span></div>`;
+  }
+  if (children.length && !bd) {
+    notes += `<div class="note row-gap" style="justify-content:space-between"><span>Measure the whole drive to see how much is your files and how much is apps and system.</span><button class="btn small primary" data-explore="${esc(
+      v.mount
+    )}">Measure this drive</button></div>`;
   }
   if (v.can_reduce_reserved) {
     const gain = v.reserved - v.size * 0.01;
@@ -111,12 +157,40 @@ function volumeHtml(v, info) {
       gain
     )} more free space and is safe on large drives.</span><button class="btn small" data-reserve="${esc(v.device)}">${icons.lock}Lower to 1%</button></div>`;
   }
-  return `<div class="volume"><div><div class="v-name">${esc(v.label)} ${badges.join(" ")}</div><div class="v-mount">${esc(v.mount)}, ${esc(v.fstype)}</div></div>
+  return `<div class="volume"><div><div class="v-name">${esc(children.length && v.role === "system" ? "System drive" : v.label)} ${badges.join(" ")}</div><div class="v-mount">${esc(v.mount)}, ${esc(
+    v.fstype
+  )}</div></div>
     <div class="v-free"><b class="num">${bytes(v.avail)}</b><span>free of ${bytes(v.size)}</span></div>
-    ${bar([{ v: ratio * 100, c: levelColor(ratio) || "var(--disk)" }], "thick")}
+    ${usage}
     <div class="v-foot"><span>${bytes(v.used)} used${v.reserved > 0 && !v.can_reduce_reserved && v.reserved > v.size * 0.004 ? `, ${bytes(v.reserved)} reserved` : ""}</span><span class="spacer"></span>
     <button class="btn small" data-open="${esc(v.mount)}">${icons.open}Open</button><button class="btn small primary" data-explore="${esc(v.role === "home" ? store.home : v.mount)}">See what uses space</button></div>
     <div style="grid-column:1/-1">${chain(v.layers)}</div>${notes}</div>`;
+}
+
+async function recordBreakdown(status) {
+  const info = store.storage;
+  const vol = info?.volumes.find((v) => v.mount === status.root);
+  if (!vol || !status.decrypted?.length) return;
+  try {
+    const l = await call("scan_list", { path: status.root });
+    let home = 0;
+    for (const d of status.decrypted) {
+      const rel = d.slice(status.root === "/" ? 1 : status.root.length + 1).split("/");
+      let path = status.root;
+      let size = null;
+      for (const part of rel) {
+        const list = await call("scan_list", { path });
+        const hit = list.entries.find((e) => e.name === part && e.is_dir);
+        if (!hit) break;
+        path = hit.path;
+        size = hit.size;
+      }
+      if (size != null) home += size;
+    }
+    breakdowns[status.root] = { home, system: Math.max(0, l.size - home), at: Date.now() / 1000 };
+    prefs.set("breakdowns", breakdowns);
+    renderDrives();
+  } catch {}
 }
 
 function disksHtml(info) {
@@ -153,7 +227,7 @@ function renderDrives() {
     return;
   }
   const vols = info.volumes;
-  const shown = vols.filter((v) => v.role !== "boot");
+  const shown = vols.filter((v) => v.role !== "boot" && !(v.backed_by && vols.some((o) => o.mount === v.backed_by)));
   const boot = vols.filter((v) => v.role === "boot");
   el.innerHTML = `<div class="panel flush">${shown.map((v) => volumeHtml(v, info)).join("")}</div>
     ${boot.length ? `<p class="muted mt" style="font-size:12.5px">Also mounted: ${boot.map((b) => `${esc(b.label)} (${esc(b.mount)}, ${bytes(b.used)} of ${bytes(b.size)})`).join(", ")}.</p>` : ""}
@@ -218,6 +292,7 @@ function pollScan() {
       renderScan(s);
       if (s.running) scanTimer = setTimeout(pollScan, 350);
       else if (s.done) {
+        recordBreakdown(s);
         if (!current || !current.startsWith(s.root)) current = pendingPath && pendingPath.startsWith(s.root) ? pendingPath : s.root;
         pendingPath = null;
         loadResults();
@@ -231,7 +306,7 @@ function renderScan(s) {
   if (s.running) {
     el.innerHTML = `<div class="panel scan-progress"><span class="spinner"></span><div class="sp-text"><b>Measuring ${esc(tildify(s.root))}…</b> <span class="num">${plural(s.files, "file")}, ${bytes(
       s.bytes
-    )} so far</span><div class="sp-path">${esc(tildify(s.current))}</div></div><button class="btn" id="st-stop">Stop</button></div>`;
+    )} so far</span><div class="sp-path">${esc(((p) => (p.length > 110 ? "…" + p.slice(-110) : p))(tildify(s.current)))}</div></div><button class="btn" id="st-stop">Stop</button></div>`;
     el.querySelector("#st-stop").onclick = () => call("scan_cancel");
     root.querySelector("#st-results").innerHTML = "";
   } else if (!s.done) {
@@ -249,7 +324,7 @@ async function loadResults() {
   const tabs = `<div class="row-gap mb" style="justify-content:space-between"><div class="seg" id="st-sub-tabs"><button data-sub="folders">Folders</button><button data-sub="big">Largest files</button><button data-sub="rebuild">Rebuildable folders</button></div><span class="muted" style="font-size:12.5px">${plural(
     s.files,
     "file"
-  )} measured in ${s.seconds.toFixed(1)} s${s.errors ? `, ${plural(s.errors, "folder")} could not be read` : ""}.</span><button class="btn small" id="st-rescan">${icons.refresh}Scan again</button></div>`;
+  )} measured in ${s.seconds.toFixed(1)} s${s.errors ? `, ${plural(s.errors, "folder")} could not be read` : ""}.${s.decrypted?.length ? " Your encrypted home folder is shown decrypted." : ""}</span><button class="btn small" id="st-rescan">${icons.refresh}Scan again</button></div>`;
   let body = "";
   try {
     if (sub === "folders") body = await foldersHtml();

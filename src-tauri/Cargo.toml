@@ -1,6 +1,6 @@
 [package]
 name = "clearsight"
-version = "1.0.0"
+version = "1.0.1"
 description = "See everything your Linux machine is doing, and clean it up in one click."
 authors = ["Wyze3306"]
 license = "MIT"

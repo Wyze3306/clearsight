@@ -5,7 +5,7 @@ use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 const KEEP_FILE: u64 = 1024 * 1024;
@@ -58,6 +58,7 @@ pub struct Rebuildable {
 
 #[derive(Serialize, Clone)]
 pub struct Status {
+    pub decrypted: Vec<String>,
     pub running: bool,
     pub done: bool,
     pub root: String,
@@ -83,6 +84,8 @@ pub struct Scanner {
     seen: Mutex<HashSet<(u64, u64)>>,
     started: Mutex<Option<Instant>>,
     seconds: Mutex<f64>,
+    see_through: RwLock<Vec<(PathBuf, PathBuf)>>,
+    decrypted: Mutex<Vec<String>>,
 }
 
 impl Scanner {
@@ -106,6 +109,17 @@ impl Scanner {
         self.rebuild.lock().unwrap().clear();
         self.seen.lock().unwrap().clear();
         *self.root_path.lock().unwrap() = root.to_string_lossy().to_string();
+        let pairs: Vec<(PathBuf, PathBuf)> = crate::util::ecryptfs_pairs()
+            .into_iter()
+            .filter(|(upper, lower)| {
+                fs::metadata(lower).map(|m| m.dev() == meta.dev()).unwrap_or(false)
+                    && fs::read_dir(upper).is_ok()
+                    && upper.starts_with(&root)
+                    && *upper != root
+            })
+            .collect();
+        *self.decrypted.lock().unwrap() = pairs.iter().map(|(u, _)| u.to_string_lossy().to_string()).collect();
+        *self.see_through.write().unwrap() = pairs;
         *self.started.lock().unwrap() = Some(Instant::now());
         self.running.store(true, Ordering::SeqCst);
         let me = Arc::clone(self);
@@ -135,6 +149,7 @@ impl Scanner {
             *self.seconds.lock().unwrap()
         };
         Status {
+            decrypted: self.decrypted.lock().unwrap().clone(),
             running,
             done: self.tree.lock().unwrap().is_some(),
             root: self.root_path.lock().unwrap().clone(),
@@ -197,8 +212,16 @@ impl Scanner {
                 }
             };
             if meta.is_dir() {
+                let p = e.path();
+                let name = e.file_name().to_string_lossy().to_string();
                 if meta.dev() == dev {
-                    subdirs.push((e.path(), e.file_name().to_string_lossy().to_string(), meta.mtime()));
+                    let hides_lower = self.see_through.read().unwrap().iter().any(|(_, lower)| *lower == p);
+                    if !hides_lower {
+                        subdirs.push((p, name, meta.mtime(), dev));
+                    }
+                } else if self.see_through.read().unwrap().iter().any(|(upper, _)| *upper == p) {
+                    let real = fs::metadata(&p).map(|m| m.dev()).unwrap_or(meta.dev());
+                    subdirs.push((p, name, meta.mtime(), real));
                 }
                 continue;
             }
@@ -240,7 +263,7 @@ impl Scanner {
 
         let children: Vec<Node> = subdirs
             .into_par_iter()
-            .map(|(p, n, m)| self.scan_dir(&p, n, dev, inside, m))
+            .map(|(p, n, m, d)| self.scan_dir(&p, n, d, inside, m))
             .collect();
         for c in children {
             node.size += c.size;

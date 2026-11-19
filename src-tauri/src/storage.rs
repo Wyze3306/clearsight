@@ -1,7 +1,6 @@
 use crate::util::{home, mounts, run, statvfs};
 use serde::Serialize;
 use serde_json::Value;
-use std::path::Path;
 
 #[derive(Serialize, Clone)]
 pub struct Layer {
@@ -345,15 +344,7 @@ pub fn storage_info() -> StorageInfo {
             };
             let mut source = m.source.clone();
             if m.fstype == "ecryptfs" {
-                let resolved = std::fs::canonicalize(&m.source).ok().map(|p| p.to_string_lossy().to_string());
-                source = match resolved {
-                    Some(r) if !r.starts_with(&format!("{}/", m.target)) => r,
-                    _ => {
-                        let user = m.target.rsplit('/').next().unwrap_or("");
-                        let alt = format!("/home/.ecryptfs/{user}/.Private");
-                        if Path::new(&alt).exists() { alt } else { m.source.clone() }
-                    }
-                };
+                source = crate::util::ecryptfs_lower(m);
             }
             let backing = if m.fstype == "ecryptfs" {
                 volumes

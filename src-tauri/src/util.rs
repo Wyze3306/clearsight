@@ -170,6 +170,30 @@ pub fn mounts() -> Vec<MountEntry> {
         .collect()
 }
 
+pub fn ecryptfs_lower(m: &MountEntry) -> String {
+    let resolved = fs::canonicalize(&m.source).ok().map(|p| p.to_string_lossy().to_string());
+    match resolved {
+        Some(r) if !r.starts_with(&format!("{}/", m.target)) && r != m.target => r,
+        _ => {
+            let user = m.target.rsplit('/').next().unwrap_or("");
+            let alt = format!("/home/.ecryptfs/{user}/.Private");
+            if Path::new(&alt).exists() {
+                alt
+            } else {
+                m.source.clone()
+            }
+        }
+    }
+}
+
+pub fn ecryptfs_pairs() -> Vec<(PathBuf, PathBuf)> {
+    mounts()
+        .iter()
+        .filter(|m| m.fstype == "ecryptfs")
+        .map(|m| (PathBuf::from(&m.target), PathBuf::from(ecryptfs_lower(m))))
+        .collect()
+}
+
 pub fn dir_size(path: &Path) -> (u64, u64) {
     use rayon::prelude::*;
     use std::os::unix::fs::MetadataExt;

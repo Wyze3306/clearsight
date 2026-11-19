@@ -54,8 +54,9 @@ offers the button that fixes it.
 ### Storage
 - Every drive and partition explained layer by layer:
   physical disk › partition › LVM volume › LUKS container › file system.
-- **Encrypted setups made understandable.** An eCryptfs home folder is shown for what it is: an encrypted folder
-  stored inside your system partition, sharing the same free space. LUKS full-disk encryption is detected too.
+- **Reads through encryption.** An eCryptfs home folder is measured through its unlocked, decrypted view, so you see
+  your real folders and files instead of an encrypted blob, and nothing is counted twice. The system drive card
+  then splits into *your files*, *apps and system*, *reserved* and *free*. LUKS full-disk encryption is detected too.
 - Spots the **5% ext4 reserved space** on large drives and can lower it to 1% (often 15–20 GB back on a 500 GB drive).
 - A partition map of each physical drive, and the folders that live in RAM.
 - **What uses space**: a fast, parallel folder scanner (home, system, external drives or any folder) with
@@ -87,14 +88,14 @@ Grab the latest files from the [Releases page](https://github.com/Wyze3306/clear
 **Debian, Ubuntu, Linux Mint, Pop!_OS and derivatives**
 
 ```bash
-sudo apt install ./Clearsight_1.0.0_amd64.deb
+sudo apt install ./Clearsight_*_amd64.deb
 ```
 
 **Any other distribution (AppImage)**
 
 ```bash
-chmod +x Clearsight_1.0.0_amd64.AppImage
-./Clearsight_1.0.0_amd64.AppImage
+chmod +x Clearsight_*_amd64.AppImage
+./Clearsight_*_amd64.AppImage
 ```
 
 Requirements: a 64-bit Linux desktop with WebKitGTK 4.1 (installed automatically with the `.deb`, bundled in the AppImage).

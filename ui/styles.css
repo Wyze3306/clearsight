@@ -398,7 +398,7 @@ table.data tr.child td:first-child { padding-left: 46px; }
 
 .scan-progress { display: flex; align-items: center; gap: 14px; padding: 16px 18px; }
 .scan-progress .sp-text { flex: 1; min-width: 0; }
-.scan-progress .sp-path { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; }
+.scan-progress .sp-path { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .spinner { width: 20px; height: 20px; border-radius: 50%; border: 2.5px solid var(--line-strong); border-top-color: var(--accent); animation: spin .8s linear infinite; flex: none; }
 .spinner.small { width: 13px; height: 13px; border-width: 2px; }
 @keyframes spin { to { transform: rotate(360deg); } }
